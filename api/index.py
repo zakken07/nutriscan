@@ -1,16 +1,15 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from http.server import BaseHTTPRequestHandler
 import google.generativeai as genai
 import base64
 import json
 import os
 import re
 
-app = Flask(__name__)
-CORS(app)
-
 # Konfigurasi Gemini API
-genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # ==========================================
 # PROMPT GEMINI UNTUK ANALISIS MAKANAN
@@ -248,3 +247,4 @@ def health_check():
 
 def handler(request, *_):
     return app(request)
+
