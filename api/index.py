@@ -248,8 +248,3 @@ def health_check():
 
 def handler(request, *_):
     return app(request)
-
-# Untuk development lokal
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
-
