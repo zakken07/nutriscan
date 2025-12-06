@@ -129,17 +129,16 @@ def extract_json_from_response(text):
     return None
 
 
-@app.route('/api/analyze', methods=['POST'])
-def analyze_food():
+def analyze_food_image(image_data):
+    """Analisis gambar makanan dengan Gemini"""
     try:
-        data = request.get_json()
-        image_base64 = data.get('image')
-        
-        if not image_base64:
-            return jsonify({'error': 'Gambar tidak ditemukan'}), 400
-        
-        # Decode base64 image
-        image_data = base64.b64decode(image_base64)
+        # Decode base64 jika diperlukan
+        if isinstance(image_data, str):
+            if ',' in image_data:
+                image_data = image_data.split(',')[1]
+            image_bytes = base64.b64decode(image_data)
+        else:
+            image_bytes = image_data
         
         # Konfigurasi model Gemini
         model = genai.GenerativeModel('gemini-2.5-flash')
@@ -149,7 +148,7 @@ def analyze_food():
             FOOD_ANALYSIS_PROMPT,
             {
                 'mime_type': 'image/jpeg',
-                'data': image_data
+                'data': image_bytes
             }
         ])
         
@@ -158,10 +157,10 @@ def analyze_food():
         result = extract_json_from_response(result_text)
         
         if result is None:
-            return jsonify({
+            return {
                 'error': 'Gagal memproses respons AI',
                 'raw_response': result_text
-            }), 500
+            }
         
         # Validasi dan sanitasi hasil
         required_fields = ['nama_makanan', 'porsi_standar', 'kalori', 'protein', 
@@ -193,17 +192,15 @@ def analyze_food():
         except:
             result['freshness_percentage'] = 85
         
-        return jsonify(result)
+        return result
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}
 
 
-@app.route('/api/suggest', methods=['POST'])
-def get_daily_suggestion():
+def get_daily_suggestion(data):
+    """Generate saran harian personal"""
     try:
-        data = request.get_json()
-        
         total_kalori = data.get('total_kalori', 0)
         total_protein = data.get('total_protein', 0)
         total_lemak = data.get('total_lemak', 0)
@@ -231,20 +228,95 @@ def get_daily_suggestion():
         
         saran = response.text.strip()
         
-        return jsonify({'saran': saran})
+        return {'saran': saran}
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return {'error': str(e)}
 
 
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'message': 'NutriScan API berjalan dengan baik',
-        'version': '1.0.0'
-    })
-
-def handler(request, *_):
-    return app(request)
-
+class handler(BaseHTTPRequestHandler):
+    
+    def _set_headers(self, status=200):
+        self.send_response(status)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
+    def do_OPTIONS(self):
+        self._set_headers(204)
+    
+    def do_GET(self):
+        self._set_headers()
+        
+        if self.path == '/api/health' or self.path == '/health':
+            response = {
+                'status': 'healthy',
+                'message': 'NutriScan API berjalan dengan baik',
+                'version': '1.0.0',
+                'gemini_configured': bool(GEMINI_API_KEY)
+            }
+        else:
+            response = {
+                'message': 'NutriScan API',
+                'endpoints': {
+                    'health': '/api/health',
+                    'analyze': '/api/analyze (POST)',
+                    'suggest': '/api/suggest (POST)'
+                }
+            }
+        
+        self.wfile.write(json.dumps(response).encode())
+    
+    def do_POST(self):
+        try:
+            # Read body
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body.decode())
+            
+            if self.path == '/api/analyze' or self.path == '/analyze':
+                # Validate image
+                if 'image' not in data:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({
+                        'error': 'Gambar tidak ditemukan'
+                    }).encode())
+                    return
+                
+                # Analyze
+                result = analyze_food_image(data['image'])
+                
+                # Check for error
+                if 'error' in result:
+                    self._set_headers(500)
+                else:
+                    self._set_headers()
+                
+                self.wfile.write(json.dumps(result).encode())
+            
+            elif self.path == '/api/suggest' or self.path == '/suggest':
+                # Generate suggestion
+                result = get_daily_suggestion(data)
+                
+                # Check for error
+                if 'error' in result:
+                    self._set_headers(500)
+                else:
+                    self._set_headers()
+                
+                self.wfile.write(json.dumps(result).encode())
+            
+            else:
+                self._set_headers(404)
+                self.wfile.write(json.dumps({
+                    'error': 'Not found'
+                }).encode())
+                
+        except Exception as e:
+            self._set_headers(500)
+            self.wfile.write(json.dumps({
+                'error': 'Failed to process request',
+                'message': str(e)
+            }).encode())
