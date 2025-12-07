@@ -4,9 +4,11 @@ import base64
 import json
 import os
 import re
+import requests  # ← TAMBAH IMPORT
 
-# Konfigurasi Gemini API
+# Konfigurasi API Keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROK_API_KEY = os.environ.get("GROK_API_KEY", "")  # ← TAMBAH INI
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -73,10 +75,9 @@ PENTING: Kembalikan HANYA JSON valid tanpa teks tambahan apapun.
 """
 
 # ==========================================
-# PROMPT GEMINI UNTUK SARAN HARIAN PERSONAL
+# PROMPT GROK UNTUK SARAN HARIAN PERSONAL
 # ==========================================
-DAILY_SUGGESTION_PROMPT = """
-Kamu adalah ahli gizi Indonesia yang ramah dan memberikan saran personal berdasarkan data asupan gizi harian.
+GROK_SUGGESTION_PROMPT = """Kamu adalah ahli gizi Indonesia yang ramah dan memberikan saran personal berdasarkan data asupan gizi harian.
 
 DATA PENGGUNA:
 - Nama: {nama}
@@ -99,8 +100,7 @@ INSTRUKSI:
 4. Gunakan bahasa Indonesia yang natural dan ramah
 5. Maksimal 3-4 kalimat
 
-Berikan saran dalam format teks biasa (bukan JSON), langsung ke poin tanpa pembuka.
-"""
+Berikan saran dalam format teks biasa (bukan JSON), langsung ke poin tanpa pembuka."""
 
 
 def extract_json_from_response(text):
@@ -199,9 +199,15 @@ def analyze_food_image(image_data):
         return {'error': str(e)}
 
 
-def get_daily_suggestion(data):
-    """Generate saran harian personal"""
+# ==========================================
+# ← FUNGSI BARU: GROK API UNTUK SARAN
+# ==========================================
+def get_daily_suggestion_grok(data):
+    """Generate saran harian personal menggunakan Grok AI"""
     try:
+        if not GROK_API_KEY:
+            return {'error': 'GROK_API_KEY not configured'}
+        
         total_kalori = data.get('total_kalori', 0)
         total_protein = data.get('total_protein', 0)
         total_lemak = data.get('total_lemak', 0)
@@ -213,7 +219,7 @@ def get_daily_suggestion(data):
         persen_kalori = round((total_kalori / bmr) * 100, 1) if bmr > 0 else 0
         
         # Format prompt dengan data pengguna
-        prompt = DAILY_SUGGESTION_PROMPT.format(
+        prompt = GROK_SUGGESTION_PROMPT.format(
             nama=nama,
             bmr=round(bmr),
             total_kalori=round(total_kalori),
@@ -223,13 +229,41 @@ def get_daily_suggestion(data):
             total_karbohidrat=round(total_karbohidrat, 1)
         )
         
-        # Generate saran
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        response = model.generate_content(prompt)
+        # Call Grok API
+        url = "https://api.x.ai/v1/chat/completions"
         
-        saran = response.text.strip()
+        headers = {
+            "Authorization": f"Bearer {GROK_API_KEY}",
+            "Content-Type": "application/json"
+        }
         
-        return {'saran': saran}
+        payload = {
+            "model": "grok-4-1-fast-non-reasoning", 
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Kamu adalah ahli gizi Indonesia yang memberikan saran personal dalam bahasa Indonesia yang ramah dan mudah dipahami."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 250
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            saran = result['choices'][0]['message']['content'].strip()
+            return {'saran': saran}
+        else:
+            return {
+                'error': f'Grok API error: {response.status_code}',
+                'details': response.text
+            }
         
     except Exception as e:
         return {'error': str(e)}
@@ -256,15 +290,16 @@ class handler(BaseHTTPRequestHandler):
                 'status': 'healthy',
                 'message': 'NutriScan API berjalan dengan baik',
                 'version': '1.0.0',
-                'gemini_configured': bool(GEMINI_API_KEY)
+                'gemini_configured': bool(GEMINI_API_KEY),
+                'grok_configured': bool(GROK_API_KEY)  # ← TAMBAH CEK GROK
             }
         else:
             response = {
                 'message': 'NutriScan API',
                 'endpoints': {
                     'health': '/api/health',
-                    'analyze': '/api/analyze (POST)',
-                    'suggest': '/api/suggest (POST)'
+                    'analyze': '/api/analyze (POST) - Gemini',
+                    'suggest': '/api/suggest (POST) - Grok AI'
                 }
             }
         
@@ -277,6 +312,7 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length)
             data = json.loads(body.decode())
             
+            # ← ENDPOINT ANALYZE (PAKAI GEMINI)
             if self.path == '/api/analyze' or self.path == '/analyze':
                 # Validate image
                 if 'image' not in data:
@@ -286,7 +322,7 @@ class handler(BaseHTTPRequestHandler):
                     }).encode())
                     return
                 
-                # Analyze
+                # Analyze dengan Gemini
                 result = analyze_food_image(data['image'])
                 
                 # Check for error
@@ -297,9 +333,10 @@ class handler(BaseHTTPRequestHandler):
                 
                 self.wfile.write(json.dumps(result).encode())
             
+            # ← ENDPOINT SUGGEST (PAKAI GROK)
             elif self.path == '/api/suggest' or self.path == '/suggest':
-                # Generate suggestion
-                result = get_daily_suggestion(data)
+                # Generate suggestion dengan Grok
+                result = get_daily_suggestion_grok(data)
                 
                 # Check for error
                 if 'error' in result:
@@ -321,4 +358,3 @@ class handler(BaseHTTPRequestHandler):
                 'error': 'Failed to process request',
                 'message': str(e)
             }).encode())
-
