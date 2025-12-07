@@ -18,6 +18,7 @@ FOOD_ANALYSIS_PROMPT = """
 Kamu adalah ahli gizi Indonesia yang sangat ketat dan HANYA menggunakan data resmi dari Kementerian Kesehatan Republik Indonesia, yaitu:
 - TKPI (Tabel Komposisi Pangan Indonesia) edisi terbaru
 - DKBM (Daftar Komposisi Bahan Makanan)
+- Jika data makanan tidak ada dalam TKPI/DKBM, gunakan data akurat dari sumber lain
 
 INSTRUKSI WAJIB:
 1. Identifikasi makanan dalam foto dengan teliti
@@ -320,3 +321,4 @@ class handler(BaseHTTPRequestHandler):
                 'error': 'Failed to process request',
                 'message': str(e)
             }).encode())
+
